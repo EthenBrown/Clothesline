@@ -1,14 +1,14 @@
 # Clothesline
 
-<img src="https://oldplusnew.github.io/Clothesline/hero.png" alt="Clothesline：几张截图用晾衣夹挂在屏幕顶部的一条晾衣绳上" width="100%">
+<img src="docs/hero.png" alt="Clothesline：几张截图用晾衣夹挂在屏幕顶部的一条晾衣绳上" width="100%">
 
 **Windows 版「晾衣绳」：截图随手一挂，桌面干干净净。**
 
 指针蹭一下屏幕最上沿，绳就滑下来，上面挂着刚拍的截图；指针离开，它自己收回去。
 
-作者：[oldplusnew](https://github.com/oldplusnew)
+上游项目：[oldplusnew/Clothesline](https://github.com/oldplusnew/Clothesline)　·　本分支维护：[EthenBrown](https://github.com/EthenBrown)
 
-> **在线介绍页（含下载按钮、微信可打开）：** https://oldplusnew.github.io/Clothesline/
+> **在线介绍页（含下载按钮、微信可打开）：** https://EthenBrown.github.io/Clothesline/
 
 ## 第一次用？四步上手
 
@@ -82,7 +82,7 @@
 
 ## 安装
 
-到 [Releases](https://github.com/oldplusnew/Clothesline/releases/latest) 下载 `Clothesline.exe`，双击即可运行。
+到 [Releases](https://github.com/EthenBrown/Clothesline/releases/latest) 下载 `Clothesline.exe`，双击即可运行。
 
 - 单文件、自包含（约 63 MB），**不需要安装 .NET**
 - 无安装程序、不写系统目录、不注册服务；设置存于 `%APPDATA%\Clothesline\settings.json`
@@ -102,7 +102,7 @@
 需要 [.NET 8 SDK](https://dotnet.microsoft.com/download)。
 
 ```bash
-git clone https://github.com/oldplusnew/Clothesline.git
+git clone https://github.com/EthenBrown/Clothesline.git
 cd Clothesline
 dotnet build -c Release
 dotnet publish Clothesline.csproj -c Release -r win-x64 --self-contained true \
@@ -139,15 +139,11 @@ dotnet publish Clothesline.csproj -c Release -r win-x64 --self-contained true \
 | `ShotDedup.cs` | 截图判重：时间窗 + 真实像素尺寸 + 内容指纹，剪贴板 / 文件夹两路共用 |
 | `TriggerSettingsWindow.cs` | 「触发区域设置…」窗口，调节左右安全边距 |
 
-## 支持作者
+## 关于本分支
 
-Clothesline **永久免费**：源码开放、无广告、无账号、不联网。个人用、公司用，都不必付费。
+本分支由 [EthenBrown](https://github.com/EthenBrown) 维护，基于 [oldplusnew/Clothesline](https://github.com/oldplusnew/Clothesline) 改进；交互设计源自 macOS 原版 [Tendedero](https://github.com/alejandrobujan/tendedero)（Alejandro Buján，MIT）。
 
-如果它确实替你省了事，可以扫下面这张码请我喝杯茶：
-
-<img src="https://oldplusnew.github.io/Clothesline/alipay.png" alt="支付宝收款码（Oldplusnew）" width="240">
-
-> 打赏完全自愿。它不会解锁任何功能——所有功能本来就都给你；也不换来"优先处理"，issue 一视同仁地看。
+Clothesline **永久免费**：源码开放、无广告、无账号、不联网。本分支不设打赏；若想支持原作者，请前往上游项目。
 
 ## 许可
 
