@@ -120,7 +120,7 @@ internal sealed class OnboardingWindow : Window
         });
         body.Children.Add(new TextBlock
         {
-            Text = "作者 oldplusnew　·　改编自 Tenedero（macOS）by Alejandro Buján",
+            Text = "本分支 EthenBrown　·　改编自 Tenedero（macOS）by Alejandro Buján",
             FontSize = 11.5,
             Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0x8E, 0x7C)),
             TextWrapping = TextWrapping.Wrap,
