@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -40,12 +41,14 @@ internal sealed class LineWindow : Window
     private IntPtr _hwnd;
     private uint _taskbarCreated;
     private bool _pinned, _shown;
-    /// <summary>常驻模式下，鼠标此刻是否在绳区（在就不穿透，好让人点图和图钉）。</summary>
-    private bool _stripInteractive;
+    private bool _clickThrough = false;
     private uint _exclClipFmt;
     private long _suppressClipboardUntil;
-    private (DateTime t, int w, int h)? _lastFileItem;
-    private DispatcherTimer? _hideTimer, _peekTimer, _breezeTimer, _dragGuard;
+    private readonly ShotDedup _dedup = new();
+    private DateTime _peekStart;
+    private Border _clearBtn = null!;
+    private StackPanel _actionBar = null!;
+    private DispatcherTimer? _hideTimer, _peekTimer, _breezeTimer, _dragGuard, _clipDebounce, _hintTimer;
 
     public bool IsPinned => _pinned;
 
@@ -78,7 +81,7 @@ internal sealed class LineWindow : Window
         MouseEnter += (_, _) => _hideTimer.Stop();
         MouseLeave += (_, _) => { if (_shown && !_pinned) _hideTimer.Start(); };
 
-        Loaded += (_, _) => { DrawLine(); ApplyPinnedFromSettings(); };
+        Loaded += (_, _) => { DrawLine(); ApplySafeInsets(); ApplyPinnedFromSettings(); };
         SourceInitialized += OnSourceInitialized;
     }
 
@@ -137,13 +140,13 @@ internal sealed class LineWindow : Window
             },
         };
         _root.Children.Add(_dropHint);
-        BuildPinButton();
+        BuildActionBar();
 
         Content = _root;
     }
 
-    /// <summary>绳子右端下方的图钉按钮：按下把晾绳固定在桌面，再按一次收起。</summary>
-    private void BuildPinButton()
+    /// <summary>绳子右端下方的两枚圆形按钮：一键清空 + 图钉。沿用原来的半透明白圆与手绘线条。</summary>
+    private void BuildActionBar()
     {
         var body = new StreamGeometry();
         using (var ctx = body.Open())
@@ -171,26 +174,89 @@ internal sealed class LineWindow : Window
             StrokeLineJoin = PenLineJoin.Round,
         };
 
-        var canvas = new Canvas { Width = 22, Height = 23 };
-        canvas.Children.Add(_pinBody);
-        canvas.Children.Add(_pinHead);
+        var pinCanvas = new Canvas { Width = 22, Height = 23 };
+        pinCanvas.Children.Add(_pinBody);
+        pinCanvas.Children.Add(_pinHead);
 
         _pinBtn = new Border
         {
             Width = 26,
             Height = 26,
             CornerRadius = new CornerRadius(13),
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Top,
-            // 刻意不放在右上角：那儿正是最大化窗口「关闭」按钮的位置，会挡住红叉。
-            // 挪到绳子下方（y≈40），避开顶部标题栏那条危险带，又还挨着绳子。
-            Margin = new Thickness(0, 40, 16, 0),
             Cursor = Cursors.Hand,
-            Child = canvas,
+            Child = pinCanvas,
+            ToolTip = "固定在桌面（Ctrl+Alt+T）",
         };
         _pinBtn.MouseLeftButtonUp += (_, e) => { e.Handled = true; SetPinned(!_pinned); };
-        _root.Children.Add(_pinBtn);
+
+        // 一键清空：同款圆形按钮，手绘垃圾桶线条
+        _clearBtn = new Border
+        {
+            Width = 26,
+            Height = 26,
+            CornerRadius = new CornerRadius(13),
+            Cursor = Cursors.Hand,
+            Child = BuildTrashIcon(),
+            Background = new SolidColorBrush(Color.FromArgb(0x96, 0xFF, 0xFF, 0xFF)),
+            ToolTip = "清空晾绳（文件保留）\n按住 Shift 点击：连同图片文件丢进回收站",
+        };
+        _clearBtn.MouseEnter += (_, _) => _clearBtn.Background = new SolidColorBrush(Color.FromArgb(0xE6, 0xB0, 0x3A, 0x2A));
+        _clearBtn.MouseLeave += (_, _) => _clearBtn.Background = new SolidColorBrush(Color.FromArgb(0x96, 0xFF, 0xFF, 0xFF));
+        _clearBtn.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            ClearAll(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
+        };
+
+        _actionBar = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            // 不放在最右上角：那儿是窗口「关闭」按钮。右侧留白变化时整组按钮一起内移。
+            Margin = new Thickness(0, 40, 16, 0),
+        };
+        _actionBar.Children.Add(_clearBtn);
+        _actionBar.Children.Add(new Border { Width = 8 });
+        _actionBar.Children.Add(_pinBtn);
+        _root.Children.Add(_actionBar);
         UpdatePinVisual();
+    }
+
+    /// <summary>垃圾桶图标：白色描边、圆角线帽，跟图钉那套手绘线条一致。</summary>
+    private static Canvas BuildTrashIcon()
+    {
+        var g = new StreamGeometry();
+        using (var ctx = g.Open())
+        {
+            ctx.BeginFigure(new Point(6.5, 8), isFilled: false, isClosed: false);
+            ctx.LineTo(new Point(19.5, 8), isStroked: true, isSmoothJoin: false);
+            ctx.BeginFigure(new Point(10.5, 8), isFilled: false, isClosed: false);
+            ctx.LineTo(new Point(10.5, 5.5), isStroked: true, isSmoothJoin: false);
+            ctx.LineTo(new Point(15.5, 5.5), isStroked: true, isSmoothJoin: false);
+            ctx.LineTo(new Point(15.5, 8), isStroked: true, isSmoothJoin: false);
+            ctx.BeginFigure(new Point(8.3, 8.5), isFilled: false, isClosed: false);
+            ctx.LineTo(new Point(9.2, 20.5), isStroked: true, isSmoothJoin: false);
+            ctx.LineTo(new Point(16.8, 20.5), isStroked: true, isSmoothJoin: false);
+            ctx.LineTo(new Point(17.7, 8.5), isStroked: true, isSmoothJoin: false);
+            ctx.BeginFigure(new Point(11.5, 11.5), isFilled: false, isClosed: false);
+            ctx.LineTo(new Point(11.7, 17.5), isStroked: true, isSmoothJoin: false);
+            ctx.BeginFigure(new Point(14.5, 11.5), isFilled: false, isClosed: false);
+            ctx.LineTo(new Point(14.3, 17.5), isStroked: true, isSmoothJoin: false);
+        }
+        g.Freeze();
+        var p = new System.Windows.Shapes.Path
+        {
+            Data = g,
+            Stroke = new SolidColorBrush(Colors.White),
+            StrokeThickness = 1.25,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+        };
+        var c = new Canvas { Width = 26, Height = 26 };
+        c.Children.Add(p);
+        return c;
     }
 
     /// <summary>图钉的外观跟着固定状态走：灰色=会自己收起，橙色=已固定在桌面。</summary>
@@ -225,6 +291,8 @@ internal sealed class LineWindow : Window
         _dragGuard?.Stop();        // 真的在拖文件，取消自动收回
         if (!_shown) ShowLine();   // 拖到顶部时绳子可能还没落下，这里补一次
         _hideTimer.Stop();
+        SetClickThrough(false);    // 拖放期间别让空白区穿透把 Drop 吃掉
+        if (_dropHint.Child is TextBlock tb) tb.Text = "松手，挂到绳上";
         _dropHint.Visibility = Visibility.Visible;
     }
 
@@ -322,7 +390,7 @@ internal sealed class LineWindow : Window
                 if (wParam == (IntPtr)1) { TogglePin(); handled = true; }
                 break;
             case Native.WM_CLIPBOARDUPDATE:
-                OnClipboardChanged();
+                ArmClipboardRead();
                 break;
             case Native.WM_APP + 1:
                 _tray?.HandleTrayMessage(unchecked((int)lParam.ToInt64()));
@@ -334,31 +402,80 @@ internal sealed class LineWindow : Window
 
     private void SetClickThrough(bool on)
     {
-        if (_hwnd == IntPtr.Zero) return;
+        if (_hwnd == IntPtr.Zero || on == _clickThrough) return;
+        _clickThrough = on;
         int ex = unchecked((int)Native.GetWindowLongPtrW(_hwnd, Native.GWL_EXSTYLE).ToInt64());
         if (on) ex |= Native.WS_EX_TRANSPARENT;
         else ex &= ~Native.WS_EX_TRANSPARENT;
         Native.SetWindowLongPtrW(_hwnd, Native.GWL_EXSTYLE, ex);
     }
 
+    private double DpiScale => _hwnd != IntPtr.Zero ? Native.GetDpiForWindow(_hwnd) / 96.0 : 1.0;
+
+    /// <summary>设置里的左右安全边距生效：按钮组跟着右侧留白内移，免得落进不可点区域。</summary>
+    public void ApplySafeInsets()
+    {
+        if (_actionBar == null) return;
+        _actionBar.Margin = new Thickness(0, 40, 16 + _settings.SafeInsetRight, 0);
+        RefreshClickThrough();
+    }
+
+    /// <summary>
+    /// 只有鼠标真的落在卡片或按钮上时才让绳子接鼠标；其余地方一律穿透给下面的窗口。
+    /// 这是「绳子挡住最小化 / 最大化 / 关闭」的根治办法——以前整条 160px 带子都吃点击。
+    /// </summary>
+    private bool IsInteractiveArea(int x, int y)
+    {
+        double scale = DpiScale;
+        double dx = x / scale, dy = y / scale;   // 钩子给的是物理像素，这里换成 WPF 的 DIP
+        if (dy < 0 || dy > StripH) return false;
+        if (dx < _settings.SafeInsetLeft || dx > Width - _settings.SafeInsetRight) return false;
+
+        // 拖文件时整条绳子都要能接住 Drop，别在这时候收穿透
+        if ((Native.GetKeyState(Native.VK_LBUTTON) & 0x8000) != 0) return true;
+
+        double rowW = _row.ActualWidth;
+        double rowLeft = (Width - rowW) / 2;
+        if (dx >= rowLeft - 8 && dx <= rowLeft + rowW + 8 && dy >= 16 && dy <= 150) return true;
+
+        double barRight = Width - (16 + _settings.SafeInsetRight);
+        if (dx >= barRight - 66 && dx <= barRight + 4 && dy >= 34 && dy <= 74) return true;
+        return false;
+    }
+
+    private bool RefreshClickThrough()
+    {
+        if (!_shown) { SetClickThrough(true); return false; }
+        if (!Native.GetCursorPos(out var p)) { SetClickThrough(true); return false; }
+        bool interactive = IsInteractiveArea(p.X, p.Y);
+        SetClickThrough(!interactive);
+        return interactive;
+    }
+
     // ---------- 显示 / 收起 ----------
 
     private void OnGlobalMouse(int x, int y)
     {
-        // 常驻模式：鼠标进绳区就取消穿透（好点图和图钉），离开绳区就恢复穿透。
-        // 这样绳子一直挂在那儿，也不会挡住屏幕顶部本来要点的东西。
-        if (_pinned)
+        // 无论是否固定：显示中时按「是否落在卡片/按钮上」实时调整穿透，空白一律让给下面的窗口。
+        // 顺带自己管自动收起：空白区是穿透的，WPF 收不到 MouseLeave，不能只靠那个事件。
+        if (_shown)
         {
-            bool inside = IsPointInStrip(x, y);
-            if (inside != _stripInteractive)
+            RefreshClickThrough();
+            if (!_pinned)
             {
-                _stripInteractive = inside;
-                SetClickThrough(!inside);
+                // 收起沿用原来的语义：光标还在条带里就别收；自动露头期间交给 peek 计时器。
+                bool insideStrip = IsPointInStrip(x, y);
+                bool peeking = _peekTimer != null && _peekTimer.IsEnabled;
+                if (insideStrip || peeking) _hideTimer?.Stop();
+                else if (_hideTimer != null && !_hideTimer.IsEnabled) _hideTimer.Start();
             }
-            return;
+        }
+        else if (!_pinned && (Native.GetKeyState(Native.VK_LBUTTON) & 0x8000) == 0)
+        {
+            SetClickThrough(true);
         }
 
-        if (_shown) return;
+        if (_pinned || _shown) return;
 
         // 平时要真正触顶(y<=2)才唤出；但"按住左键往上传文件"这个动作很难正好压在 2px 里，
         // 所以拖拽状态下把判定放宽到 40px —— 拖到屏幕顶部附近绳子就滑下来接住。
@@ -368,6 +485,12 @@ internal sealed class LineWindow : Window
 
         int w = Native.GetSystemMetrics(0);
         if (x < 0 || x > w) return; // 只管主屏
+
+        // 左右安全边距内不唤出：两端通常是窗口控制按钮 / 应用菜单，别去抢那几个像素。
+        double scale = DpiScale;
+        if (x < _settings.SafeInsetLeft * scale ||
+            x > (Width - _settings.SafeInsetRight) * scale) return;
+
         if (IsForegroundFullscreen()) return;
         Dispatcher.BeginInvoke(() =>
         {
@@ -410,7 +533,7 @@ internal sealed class LineWindow : Window
     {
         _shown = true;
         _hideTimer.Stop();
-        SetClickThrough(false);
+        RefreshClickThrough();
         SlideTo(0, TimeSpan.FromSeconds(0.55), new BounceEase { Bounces = 1, Bounciness = 3, EasingMode = EasingMode.EaseOut });
     }
 
@@ -440,7 +563,7 @@ internal sealed class LineWindow : Window
     {
         if (on == _pinned)
         {
-            if (on && !_shown) { ShowLine(); _stripInteractive = true; SetClickThrough(false); }
+            if (on && !_shown) { ShowLine(); RefreshClickThrough(); }
             return;
         }
 
@@ -453,8 +576,7 @@ internal sealed class LineWindow : Window
         if (on)
         {
             ShowLine();
-            _stripInteractive = true;
-            SetClickThrough(false);
+            RefreshClickThrough();
         }
         else
         {
@@ -472,9 +594,8 @@ internal sealed class LineWindow : Window
     {
         if (!_settings.PinnedToDesktop) return;
         _pinned = true;
-        _stripInteractive = true;
         ShowLine();
-        SetClickThrough(false);
+        RefreshClickThrough();
         UpdatePinVisual();
         Diag.Log("晾绳：按上次的设置，启动即固定在桌面");
     }
@@ -482,7 +603,7 @@ internal sealed class LineWindow : Window
     /// <summary>屏幕坐标（物理像素）是否落在绳区里。</summary>
     private bool IsPointInStrip(int x, int y)
     {
-        double scale = _hwnd != IntPtr.Zero ? Native.GetDpiForWindow(_hwnd) / 96.0 : 1.0;
+        double scale = DpiScale;
         return x >= 0 && x <= Width * scale && y >= 0 && y <= StripH * scale;
     }
 
@@ -491,6 +612,7 @@ internal sealed class LineWindow : Window
     {
         if (_pinned) return;
         ShowLine();
+        _peekStart = DateTime.Now;
         _peekTimer ??= new DispatcherTimer();
         _peekTimer.Stop();
         _peekTimer.Tick -= OnPeekTick;
@@ -510,8 +632,7 @@ internal sealed class LineWindow : Window
                 if (string.IsNullOrWhiteSpace(p) || !File.Exists(p)) continue;
                 string ext = Path.GetExtension(p).ToLowerInvariant();
                 bool video = ext is ".mp4" or ".mov" or ".m4v" or ".mkv" or ".avi" or ".wmv" or ".webm";
-                AddItem(p, video);
-                n++;
+                if (AddItem(p, video)) n++;
             }
             catch (Exception e) { Diag.Log($"挂载外部文件失败（{p}）：{e.Message}"); }
         }
@@ -522,6 +643,7 @@ internal sealed class LineWindow : Window
     private void PeekBriefly()
     {
         ShowLine();
+        _peekStart = DateTime.Now;
         _peekTimer ??= new DispatcherTimer();
         _peekTimer.Stop();
         _peekTimer.Tick -= OnPeekTick;
@@ -534,7 +656,8 @@ internal sealed class LineWindow : Window
     {
         _peekTimer!.Stop();
         if (_pinned) return;
-        if (IsMouseInsideStrip()) { _peekTimer.Start(); return; }
+        // 光标停在绳区可以多留一会儿，但最多续到 6 秒；否则绳子会一直挂着挡住窗口标题栏。
+        if (IsMouseInsideStrip() && (DateTime.Now - _peekStart).TotalSeconds < 6) { _peekTimer.Start(); return; }
         if (_shown) HideLine();
     }
 
@@ -558,15 +681,27 @@ internal sealed class LineWindow : Window
     {
         Dispatcher.BeginInvoke(() =>
         {
-            try { AddItem(path, isVideo); } catch { }
+            try
+            {
+                var info = isVideo ? null : TryGetImageInfo(path);
+                if (info is { } s && _dedup.ShouldSkip(s.W, s.H, s.Fp, false, DateTime.Now))
+                {
+                    Diag.Log($"文件夹：{Path.GetFileName(path)} 与刚挂上的图是同一次截图，跳过");
+                    return;
+                }
+                if (AddItem(path, isVideo) && info is { } s2)
+                    _dedup.Mark(s2.W, s2.H, s2.Fp, false, DateTime.Now);
+            }
+            catch { }
         });
     }
 
-    public void AddItem(string path, bool isVideo, ImageSource? preview = null)
+    /// <summary>把一张图挂到绳上；返回是否真的挂上了（图片读不出来就不挂）。</summary>
+    public bool AddItem(string path, bool isVideo, ImageSource? preview = null)
     {
         ImageSource? thumb = preview;
         if (thumb == null && !isVideo) thumb = LoadThumbnail(path);
-        if (thumb == null && !isVideo) return; // 图片读不出来就不挂
+        if (thumb == null && !isVideo) return false; // 图片读不出来就不挂
 
         var item = new HangItem(path, isVideo, thumb);
         HookItem(item);
@@ -575,13 +710,11 @@ internal sealed class LineWindow : Window
         item.Swing((Random.Shared.NextDouble() - 0.5) * 14);
         _items.Add(item);
 
-        if (preview == null && !isVideo && thumb is BitmapSource bs)
-            _lastFileItem = (DateTime.Now, bs.PixelWidth, bs.PixelHeight);
-
         TrimOverflow();
         _tray?.SetCount(_items.Count);
 
         if (!_shown && !_pinned) PeekBriefly(); // 新截图来了，露个头提示
+        return true;
     }
 
     private static ImageSource? LoadThumbnail(string path)
@@ -619,7 +752,64 @@ internal sealed class LineWindow : Window
             try { _ = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(it.FilePath) { UseShellExecute = true }); } catch { }
         };
         item.UnhangClick += Unhang;
-        item.DeleteClick += it => { if (DeleteToRecycleBin(it.FilePath)) Unhang(it); };
+        item.DeleteClick += it =>
+        {
+            // 先把卡片取下来：文件删不掉（被占用 / 路径异常）也不该让图一直赖在绳上。
+            Unhang(it);
+            try
+            {
+                if (!DeleteToRecycleBin(it.FilePath))
+                    Diag.Log("丢进回收站失败（已从绳上取下）：" + it.FilePath);
+            }
+            catch (Exception ex) { Diag.Log("删除异常（已从绳上取下）：" + ex.Message); }
+        };
+    }
+
+    /// <summary>一键清空：默认只从绳上取下、文件保留；按 Shift 点时连文件一起进回收站。</summary>
+    public void ClearAll(bool deleteFiles)
+    {
+        if (_items.Count == 0) { ShowHint("晾绳已经是空的"); return; }
+
+        var snapshot = _items.ToArray();
+        _items.Clear();
+        foreach (var it in snapshot) _row.Children.Remove(it.Visual);
+
+        if (deleteFiles)
+        {
+            foreach (var it in snapshot)
+            {
+                try
+                {
+                    if (!DeleteToRecycleBin(it.FilePath))
+                        Diag.Log("清空：删除文件失败 " + it.FilePath);
+                }
+                catch (Exception ex) { Diag.Log("清空：删除异常 " + ex.Message); }
+            }
+        }
+
+        _tray?.SetCount(0);
+        ShowHint(deleteFiles ? $"已清空 {snapshot.Length} 张 · 文件已进回收站"
+                             : $"已清空 {snapshot.Length} 张 · 文件保留");
+        Diag.Log($"一键清空：{snapshot.Length} 张，删文件={deleteFiles}");
+    }
+
+    /// <summary>借拖放提示那块牌子显示一句话，不新增视觉元素。</summary>
+    private void ShowHint(string text)
+    {
+        if (_dropHint.Child is TextBlock tb) tb.Text = text;
+        _dropHint.Visibility = Visibility.Visible;
+        _hintTimer?.Stop();
+        _hintTimer ??= new DispatcherTimer();
+        _hintTimer.Interval = TimeSpan.FromSeconds(1.6);
+        _hintTimer.Tick -= OnHintTick;
+        _hintTimer.Tick += OnHintTick;
+        _hintTimer.Start();
+    }
+
+    private void OnHintTick(object? sender, EventArgs e)
+    {
+        _hintTimer?.Stop();
+        _dropHint.Visibility = Visibility.Collapsed;
     }
 
     private void Unhang(HangItem it)
@@ -669,12 +859,11 @@ internal sealed class LineWindow : Window
             var raw = TryGetClipboardImage();   // 剪贴板正被别的程序占用时，重试几次
             if (raw == null || raw.PixelWidth < 8 || raw.PixelHeight < 8) return;
             var img = NormalizeAlpha(raw);
-            if (_lastFileItem is { } last
-                && (DateTime.Now - last.t).TotalSeconds < 5
-                && last.w == img.PixelWidth && last.h == img.PixelHeight)
+            string fp = Fingerprint(img) ?? "";
+            if (_dedup.ShouldSkip(img.PixelWidth, img.PixelHeight, fp, true, DateTime.Now))
             {
-                Diag.Log("剪贴板：与刚落盘的截图同尺寸，视为同一次截图，跳过");
-                return; // Win+Shift+S 已按文件挂过，去重
+                Diag.Log($"剪贴板：{img.PixelWidth}×{img.PixelHeight} 与刚挂上的图是同一次截图，跳过");
+                return;
             }
 
             var store = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Clothesline", "Hang");
@@ -684,9 +873,63 @@ internal sealed class LineWindow : Window
             enc.Frames.Add(BitmapFrame.Create(img));
             using (var fs = File.Create(file)) enc.Save(fs);
             Diag.Log($"剪贴板：挂上 {img.PixelWidth}×{img.PixelHeight} 图片 → {Path.GetFileName(file)}");
-            AddItem(file, false, img);
+            if (AddItem(file, false, img))
+                _dedup.Mark(img.PixelWidth, img.PixelHeight, fp, true, DateTime.Now);
         }
         catch (Exception e) { Diag.Log("剪贴板读取失败：" + e.Message); }
+    }
+
+    /// <summary>
+    /// 一次截图会连发好几条 WM_CLIPBOARDUPDATE（先放 DIB，随后补 PNG 等格式）。
+    /// 以前每条都立刻读一次剪贴板，同一次截图就必挂 2~3 张——这是重复挂载的主因。
+    /// 现在等剪贴板安静 350ms 再读，只读一次；之后还有尺寸 + 指纹判重兜底。
+    /// </summary>
+    private void ArmClipboardRead()
+    {
+        _clipDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _clipDebounce.Stop();
+        _clipDebounce.Tick -= OnClipboardTick;
+        _clipDebounce.Tick += OnClipboardTick;
+        _clipDebounce.Start();
+    }
+
+    private void OnClipboardTick(object? sender, EventArgs e)
+    {
+        _clipDebounce?.Stop();
+        OnClipboardChanged();
+    }
+
+    /// <summary>缩到 16×16 灰度并量化，得到一张图的粗略「指纹」，用来区分同尺寸的不同截图。</summary>
+    private static string? Fingerprint(BitmapSource src)
+    {
+        try
+        {
+            var small = new TransformedBitmap(src,
+                new ScaleTransform(16.0 / src.PixelWidth, 16.0 / src.PixelHeight));
+            var gray = new FormatConvertedBitmap(small, PixelFormats.Gray8, null, 0);
+            gray.Freeze();
+            var px = new byte[256];
+            gray.CopyPixels(px, 16, 0);
+            var sb = new StringBuilder(256);
+            foreach (byte b in px) sb.Append((char)('a' + (b >> 6)));
+            return sb.ToString();
+        }
+        catch { return null; }
+    }
+
+    /// <summary>只读图片头拿真实像素尺寸和指纹；不能拿 LoadThumbnail 的 320 宽缩略图去比。</summary>
+    private static (int W, int H, string Fp)? TryGetImageInfo(string path)
+    {
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var dec = BitmapDecoder.Create(fs,
+                BitmapCreateOptions.DelayCreation | BitmapCreateOptions.IgnoreImageCache,
+                BitmapCacheOption.None);
+            var f = dec.Frames[0];
+            return (f.PixelWidth, f.PixelHeight, Fingerprint(f) ?? "");
+        }
+        catch { return null; }
     }
 
     /// <summary>微信/QQ 截图刚写完剪贴板时可能还被占用，重试几次再放弃。</summary>
@@ -751,5 +994,7 @@ internal sealed class LineWindow : Window
         _breezeTimer?.Stop();
         _hideTimer?.Stop();
         _peekTimer?.Stop();
+        _clipDebounce?.Stop();
+        _hintTimer?.Stop();
     }
 }

@@ -26,6 +26,12 @@ internal sealed class Settings
     /// <summary>是否在图片/视频的右键菜单里注册「挂到晾衣绳」。</summary>
     public bool ContextMenuEnabled { get; set; } = true;
 
+    /// <summary>顶部触发区左侧留白（WPF DIP）。留白内不唤出绳子、也不拦截鼠标。</summary>
+    public int SafeInsetLeft { get; set; } = 0;
+
+    /// <summary>顶部触发区右侧留白（WPF DIP）。右上角是最小化/最大化/关闭，留白可避开它们。</summary>
+    public int SafeInsetRight { get; set; } = 0;
+
     private static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Clothesline");
 

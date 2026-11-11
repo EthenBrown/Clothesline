@@ -128,6 +128,7 @@ internal sealed class TrayIcon : IDisposable
         _ = Native.AppendMenu(menu, Native.MF_SEPARATOR, 0, null);
         _ = Native.AppendMenu(menu, Native.MF_STRING, 104, "打开截图文件夹");
         _ = Native.AppendMenu(menu, Native.MF_STRING, 107, "使用说明…");
+        _ = Native.AppendMenu(menu, Native.MF_STRING, 109, "触发区域设置…");
         _ = Native.AppendMenu(menu, Native.MF_SEPARATOR, 0, null);
         _ = Native.AppendMenu(menu, Native.MF_STRING, 105, "退出");
 
@@ -153,6 +154,7 @@ internal sealed class TrayIcon : IDisposable
                 ShellMenu.Apply(_settings.ContextMenuEnabled);
                 break;
             case 107: OnboardingWindow.ShowFor(_win, _settings); break;
+            case 109: TriggerSettingsWindow.ShowFor(_win, _settings); break;
             case 108: PickFiles(); break;
         }
     }

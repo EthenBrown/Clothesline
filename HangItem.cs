@@ -137,6 +137,8 @@ internal sealed class HangItem
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(0, PinH - 14, 2, 0),
             Cursor = Cursors.Arrow,
+            Tag = "delete",
+            ToolTip = "取下并丢进回收站",
         };
         var tmpl = new ControlTemplate(typeof(Button));
         var bf = new FrameworkElementFactory(typeof(Border));
@@ -174,6 +176,7 @@ internal sealed class HangItem
         // 交互：单击复制 / 双击打开 / 拖出分享
         _root.MouseLeftButtonDown += (_, e) =>
         {
+            if (IsFromDeleteButton(e.OriginalSource)) return; // 点 ✕ 别顺手触发复制 / 拖动
             _down = e.GetPosition(null);
             _pressed = true;
             if (e.ClickCount == 2)
@@ -229,6 +232,18 @@ internal sealed class HangItem
         finally { _dragged = false; }
     }
 
+    /// <summary>这一下是不是按在 ✕ 上：是就别让卡片的单击/双击/拖动逻辑掺和进来。</summary>
+    private static bool IsFromDeleteButton(object? src)
+    {
+        var d = src as DependencyObject;
+        while (d != null)
+        {
+            if (d is FrameworkElement fe && fe.Tag is string s && s == "delete") return true;
+            d = d is Visual ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
+        }
+        return false;
+    }
+
     private static bool IsForegroundExplorer()
     {
         var fg = Native.GetForegroundWindow();
@@ -252,6 +267,12 @@ internal sealed class HangItem
             AutoReverse = true,
             RepeatBehavior = new RepeatBehavior(2),
             EasingFunction = new SineEase(),
+            FillBehavior = FillBehavior.Stop,   // 不 HoldEnd，否则被吹过的图会永久歪 -2.2°
+        };
+        a.Completed += (_, _) =>
+        {
+            _rot.BeginAnimation(RotateTransform.AngleProperty, null);
+            _rot.Angle = 0;
         };
         _rot.BeginAnimation(RotateTransform.AngleProperty, a);
     }

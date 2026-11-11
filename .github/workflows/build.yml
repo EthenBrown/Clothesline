@@ -43,4 +43,10 @@ jobs:
           body: |
             下载 `Clothesline.exe` 双击即可运行（自包含，无需安装 .NET）。
 
+            ## 本版更新
+            - 修复一次截图重复挂出 2~4 张（剪贴板防抖 + 原图尺寸与内容指纹判重）
+            - 顶部触发区域可调，空白处点击穿透，不再挡住窗口的最小化 / 最大化 / 关闭
+            - 新增「一键清空」按钮；修复单张图片偶尔删不掉
+            - 修复露头后不自动收起、微风动画后图片歪斜
+
             Clothesline 是 [Tendedero](https://github.com/alejandrobujan/tendedero)（macOS，作者 Alejandro Buján）的 Windows 重写版，交互设计与功能定义均致敬原作；名称与图标为另行创作。
